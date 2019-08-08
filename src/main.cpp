@@ -21,78 +21,82 @@
 #include <TimeLib.h>
 #include <jled.h>
 #include <Wire.h>
+#include <WiFi.h>
 
 #include "I2Cdev.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 
-#undef DEBUG
+#define DEBUG
 
-#define SCLK_PIN 25
-#define MISO_PIN 32
-#define MOSI_PIN 13
-#define SS_PIN 33
+// MPU-6050 constants
+static const uint8_t INTERRUPT_PIN = 2;
 
-// const int MPU = 0x68;
+// MPU-6050 related variables
 MPU6050 mpu;
-const uint16_t periodMPU = 100;
-const uint16_t num_accel_samples = 10;
-#define MPU_INTERRUPT_PIN 2 // use pin 2 on Arduino Uno & most boards
-// MPU control/status vars
-bool dmpReady = false;  // set true if DMP init was successful
-uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
-uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
-uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
-uint16_t fifoCount;     // count of all bytes currently in FIFO
-uint8_t fifoBuffer[64]; // FIFO storage buffer
 
-// orientation/motion vars
-Quaternion q;        // [w, x, y, z]         quaternion container
-VectorInt16 aa;      // [x, y, z]            accel sensor measurements
-VectorInt16 aaReal;  // [x, y, z]            gravity-free accel sensor measurements
-VectorInt16 aaWorld; // [x, y, z]            world-frame accel sensor measurements
-VectorFloat gravity; // [x, y, z]            gravity vector
-float euler[3];      // [psi, theta, phi]    Euler angle container
-float ypr[3];        // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-
-// packet structure for InvenSense teapot demo
-uint8_t teapotPacket[14] = {'$', 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, '\r', '\n'};
-
-#define BAT_MEASURE_ADC 35 // battery probe GPIO pin -> ADC1_CHANNEL_7
-#define BAT_VOLTAGE_DIVIDER 2
-
-unsigned long time_now = 0;
-
-struct acc_samples_t
-{
-    uint32_t ts;
-    uint16_t voltage;
-    int32_t AcX;
-    int32_t AcY;
-    int32_t AcZ;
-    int32_t Tmp;
-    int32_t GyX;
-    int32_t GyY;
-    int32_t GyZ;
-} acc_samples[num_accel_samples];
-
-SPIClass *hspi = NULL;
+// GPS constants | GPS TX - PIN 4 | GPS RX - PIN 5
+// changed gps tx pin from 4 to 10 due to mega2560 limitations for rx signal 
+static const uint8_t GPS_RX_PIN = 10, GPS_TX_PIN = 5;
+static const uint32_t GPSBaud = 9600;
+// GPS related variables
 TinyGPSPlus gps;
 HardwareSerial GPSSerial(1);
-char gpsFileName[80];
-char accFileName[80];
-const uint16_t period = 60000;
-uint32_t start_ts;
-uint16_t cur_sample = 0;
-auto led = JLed(14);
+
+// SD card constants
+static const uint8_t SCLK_PIN = 25; 
+static const uint8_t MISO_PIN = 32;
+static const uint8_t MOSI_PIN = 13;
+static const uint8_t SS_PIN = 33;
+
+// SD card related variables
+SPIClass *hspi = NULL;
+
+// sleep mode constants
+static const uint32_t  uS_TO_S_FACTOR = 1000;  /* Conversion factor for micro seconds to seconds */
+static const uint16_t  TIME_TO_SLEEP = 1000;        /* Time ESP32 will go to sleep (in miliseconds) */
+RTC_DATA_ATTR bool initialBoot = true;
+
+// application constants
+const uint16_t GPS_READ_PERIOD_MS = 60000;
+const uint16_t MPU_READ_PERIOD_MS = 2000;
+const uint8_t NUM_SAMPLES = 100;
+const uint8_t STATUS_LED_PIN = 14;
+
+// application variables
+unsigned long time_now = 0;
+auto status_led = JLed(STATUS_LED_PIN);
+RTC_DATA_ATTR bool dmp_ready = false;  // set true if DMP init was successful
+uint8_t mpu_int_status;   // holds actual interrupt status byte from MPU
+uint8_t dev_status;      // return status after each device operation (0 = success, !0 = error)
+RTC_DATA_ATTR uint16_t packet_size;    // expected DMP packet size (default is 42 bytes)
+uint16_t fifo_count;     // count of all bytes currently in FIFO
+uint8_t fifo_buffer[64]; // FIFO storage buffer
+static const char* tag = "jua-ams";
+ esp_reset_reason_t rst_reason;
+
+struct mpu_samples_t {
+  uint32_t ts;
+  Quaternion q;
+  int16_t gX;
+  int16_t gY;
+  int16_t gZ;
+  int16_t aX;
+  int16_t aY;
+  int16_t aZ;
+} mpu_samples[NUM_SAMPLES];
+
+RTC_DATA_ATTR uint8_t cur_sample = 0;
+RTC_DATA_ATTR time_t start_ts = 0;
+char filename[30];
 
 // ================================================================
 // ===               INTERRUPT DETECTION ROUTINE                ===
 // ================================================================
 
-volatile bool mpuInterrupt = false; // indicates whether MPU interrupt pin has gone high
-void dmpDataReady()
-{
-    mpuInterrupt = true;
+volatile bool mpu_interrupt = false;     // indicates whether MPU interrupt pin has gone high
+
+void dmpDataReady() {
+    mpu_interrupt = true;
 }
 
 static void smartDelay(unsigned long ms)
@@ -104,7 +108,7 @@ static void smartDelay(unsigned long ms)
         {
             gps.encode(GPSSerial.read());
         }
-        led.Update();
+        status_led.Update();
     } while (millis() - start < ms);
 }
 
@@ -215,22 +219,22 @@ void writeFile(fs::FS &fs, const char *path, const char *message)
 
 void appendFile(fs::FS &fs, const char *path, const char *message)
 {
-    Serial.printf("Appending to file: %s\n", path);
+    // Serial.printf("Appending to file: %s\n", path);
 
     File file = fs.open(path, FILE_APPEND);
     if (!file)
     {
         Serial.println("Failed to open file for appending");
-        led.Blink(100, 100).Forever();
+        status_led.Blink(100, 100).Forever();
         return;
     }
     if (file.print(message))
     {
-        Serial.println("Message appended");
+        // Serial.println("Message appended");
     }
     else
     {
-        led.Blink(100, 100).Forever();
+        status_led.Blink(100, 100).Forever();
         Serial.println("Append failed");
     }
     file.close();
@@ -311,232 +315,221 @@ void testFileIO(fs::FS &fs, const char *path)
     file.close();
 }
 
-void readGPS()
-{
-    char msg[80];
-    uint32_t ts;
-    double lat, lng;
-
+void read_gps() {
+  smartDelay(1);
+  if (gps.location.isUpdated() && gps.location.isValid()) {
+    sprintf(filename, "/%lu-gps.txt", start_ts);
     setTime(gps.time.hour(), gps.time.minute(), gps.time.second(),
             gps.date.day(), gps.date.month(), gps.date.year());
-    ts = now();
-    lat = gps.location.lat();
-    lng = gps.location.lng();
-    sprintf(msg, "%d;%f;%f\n", ts, lat, lng);
+    char sample_str[100];
+    char lat_str[20];
+    char lng_str[20];
+    dtostrf(gps.location.lat(), 4, 6, lat_str);
+    dtostrf(gps.location.lng(), 4, 6, lng_str);
+    sprintf(sample_str, "%lu;%s;%s\n",
+            now(), lat_str, lng_str);
 #ifdef DEBUG
-    Serial.print(ts);
-    Serial.print(";");
-    Serial.print(gps.location.lat(), 6);
-    Serial.print(";");
-    Serial.println(gps.location.lng(), 6);
+    Serial.print(F("\ntem localizacao... "));
+    Serial.println(sample_str);
 #endif
-    appendFile(SD, gpsFileName, msg);
+    // write GPS data on file
+    appendFile(SD, filename, sample_str);
+    status_led.Blink(250, 250).Repeat(2);
+  }
+  status_led.Blink(500, 500).Forever();
 }
 
-void writeMPUData()
-{
-    char msg[80];
+void write_mpu_data() {
+  sprintf(filename, "/%lu-mpu.txt", start_ts);
 #ifdef DEBUG
-    Serial.print(F("writing accelerometer data..."));
+  Serial.println(F("writing accelerometer data..."));
 #endif
-    // escreve todas as amostras coletadas
-    for (uint16_t i = 0; i < cur_sample; i++)
-    {
-        sprintf(msg, "%d;%d;%d;%d;%d;%f;%d;%d;%d\n",
-                acc_samples[i].ts,
-                acc_samples[i].voltage,
-                acc_samples[i].AcX,
-                acc_samples[i].AcY,
-                acc_samples[i].AcZ,
-                ((acc_samples[i].Tmp / 340.00) + 36.53),
-                acc_samples[i].GyX,
-                acc_samples[i].GyY,
-                acc_samples[i].GyZ);
+  char sample_str[200];
+  char qw_str[20];
+  char qx_str[20];
+  char qy_str[20];
+  char qz_str[20];
+  // escreve todas as amostras coletadas
+  for (uint8_t i = 0; i < NUM_SAMPLES; i++) {
+    dtostrf(mpu_samples[i].q.w, 4, 6, qw_str);
+    dtostrf(mpu_samples[i].q.x, 4, 6, qx_str);
+    dtostrf(mpu_samples[i].q.y, 4, 6, qy_str);
+    dtostrf(mpu_samples[i].q.z, 4, 6, qz_str);
+    sprintf(sample_str, "%lu;%s;%s;%s;%s;%d;%d;%d;%d;%d;%d\n",
+            mpu_samples[i].ts, qw_str, qx_str, qy_str, qz_str,
+            mpu_samples[i].gX, mpu_samples[i].gY, mpu_samples[i].gZ,
+            mpu_samples[i].aX, mpu_samples[i].aY, mpu_samples[i].aZ);
+    // escreve valor 'x' do acelerometro no arquivo
+    appendFile(SD, filename, sample_str);
+#ifdef DEBUG
+    if(i == 0) Serial.println(mpu_samples[0].ts);
+    // Serial.println(sample_str);
+#endif
+  }
+#ifdef DEBUG
+  Serial.println(F("ok"));
+#endif
+}
+
+void read_mpu() {
+  fifo_count = mpu.getFIFOCount();
+#ifdef DEBUG
+  Serial.print("ps: "); Serial.print(packet_size);
+  Serial.print(" | fc: "); Serial.println(fifo_count);
+#endif
+  while(fifo_count >= packet_size) {
+    mpu.getFIFOBy=
+    fifo_count -= packet_size;
+    mpu_samples[cur_sample].ts = now();
+    mpu.dmpGetQuaternion(&mpu_samples[cur_sample].q, fifo_buffer);
+    mpu_samples[cur_sample].gX = (fifo_buffer[16] << 8) | fifo_buffer[17];
+    mpu_samples[cur_sample].gY = (fifo_buffer[20] << 8) | fifo_buffer[21];
+    mpu_samples[cur_sample].gZ = (fifo_buffer[24] << 8) | fifo_buffer[25];
+    mpu_samples[cur_sample].aX = (fifo_buffer[28] << 8) | fifo_buffer[29];
+    mpu_samples[cur_sample].aY = (fifo_buffer[32] << 8) | fifo_buffer[33];
+    mpu_samples[cur_sample].aZ = (fifo_buffer[36] << 8) | fifo_buffer[37]
+    `cur_sample++;
+    // if buffer full
+    if (cur_sample == NUM_SAMPLES) {
+      write_mpu_data();
+      // reset buffer index
+      cur_sample = 0;
     }
-    appendFile(SD, accFileName, msg);
-
-#ifdef DEBUG
-    Serial.println(F("ok"));
-#endif
+  }
 }
 
-void readMPU()
-{
-    Wire.beginTransmission(MPU);
-    Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H)
-    Wire.endTransmission(false);
-    // solicita os dados do sensor
-    Wire.requestFrom(MPU, 14, true);
+void mpu_setup() {
 
-    //Armazena o valor dos sensores nas variaveis correspondentes
-    acc_samples[cur_sample].AcX = Wire.read() << 8 | Wire.read(); //0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)
-    acc_samples[cur_sample].AcY = Wire.read() << 8 | Wire.read(); //0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
-    acc_samples[cur_sample].AcZ = Wire.read() << 8 | Wire.read(); //0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
-    acc_samples[cur_sample].Tmp = Wire.read() << 8 | Wire.read(); //0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
-    acc_samples[cur_sample].GyX = Wire.read() << 8 | Wire.read(); //0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
-    acc_samples[cur_sample].GyY = Wire.read() << 8 | Wire.read(); //0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
-    acc_samples[cur_sample].GyZ = Wire.read() << 8 | Wire.read(); //0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
-    acc_samples[cur_sample].ts = now();
-    acc_samples[cur_sample].voltage = analogRead(BAT_MEASURE_ADC);
-#ifdef DEBUG
-    Serial.print(F("millis = "));
-    Serial.print(acc_samples[cur_sample].ts);
-    Serial.print(F("bat_level: "));
-    Serial.print(acc_samples[cur_sample].voltage);
-    // envia valor 'x' do acelerometro para a serial
-    Serial.print(F(" | acc_x = "));
-    Serial.print(acc_samples[cur_sample].AcX);
-    // envia valor 'y' do acelerometro para a serial
-    Serial.print(F(" | acc_y = "));
-    Serial.print(acc_samples[cur_sample].AcY);
-    // envia valor 'z' do acelerometro para a serial
-    Serial.print(F(" | acc_z = "));
-    Serial.print(acc_samples[cur_sample].AcZ);
-    // envia valor da temperatura para a serial
-    Serial.print(F(" | tmp = "));
-    Serial.print((acc_samples[cur_sample].Tmp / 340.00) + 36.53);
-    // envia valor 'x' do giroscopio para a serial
-    Serial.print(F(" | gyr_x = "));
-    Serial.print(acc_samples[cur_sample].GyX);
-    // envia valor 'y' do giroscopio para a serial
-    Serial.print(F(" | gyr_y = "));
-    Serial.print(acc_samples[cur_sample].GyY);
-    // envia valor 'z' do giroscopio para a serial
-    Serial.print(F(" | gyr_z = "));
-    Serial.println(acc_samples[cur_sample].GyZ);
+    Wire.begin();
+    Wire.setClock(400000);
+    // initialize device
+    Serial.println(F("Initializing I2C devices..."));
+    mpu.initialize();
+    pinMode(INTERRUPT_PIN, INPUT);
+    // verify connection
+    Serial.println(F("Testing device connections..."));
+    Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+
+#if 0
+    // wait for ready
+    Serial.println(F("\nSend any character to begin DMP programming and demo: "));
+    while (Serial.available() && Serial.read()); // empty buffer
+    while (!Serial.available());                 // wait for data
+    while (Serial.available() && Serial.read()); // empty buffer again
 #endif
-    cur_sample++;
-    if (cur_sample == 10)
-    {
-        writeMPUData();
-        // reinicializa o buffer temporario
-        cur_sample = 0;
+    if(rst_reason == ESP_RST_POWERON) {
+        // load and configure the DMP
+        Serial.println(F("Initializing DMP..."));
+        dev_status = mpu.dmpInitialize();
+
+        // supply your own gyro offsets here, scaled for min sensitivity
+        mpu.setXGyroOffset(220);
+        mpu.setYGyroOffset(76);
+        mpu.setZGyroOffset(-85);
+        mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
+
+        // make sure it worked (returns 0 if so)
+        if (dev_status == 0) {
+            // Calibration Time: generate offsets and calibrate our MPU6050
+            mpu.CalibrateAccel(6);
+            mpu.CalibrateGyro(6);
+            mpu.PrintActiveOffsets();
+            // turn on the DMP, now that it's ready
+            Serial.println(F("Enabling DMP..."));
+            mpu.setDMPEnabled(true);
+
+            // enable Arduino interrupt detection
+            Serial.print(F("Enabling interrupt detection (Arduino external interrupt "));
+            Serial.print(digitalPinToInterrupt(INTERRUPT_PIN));
+            Serial.println(F(")..."));
+            attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), dmpDataReady, RISING);
+            mpu_int_status = mpu.getIntStatus();
+
+            // set our DMP Ready flag so the main loop() function knows it's okay to use it
+            Serial.println(F("DMP ready! Waiting for first interrupt..."));
+            dmp_ready = true;
+
+            // get expected DMP packet size for later comparison
+            packet_size = mpu.dmpGetFIFOPacketSize();
+        } else {
+            // ERROR!
+            // 1 = initial memory load failed
+            // 2 = DMP configuration updates failed
+            // (if it's going to break, usually the code will be 1)
+            Serial.print(F("DMP Initialization failed (code "));
+            Serial.print(dev_status);
+            Serial.println(F(")"));
+        }
     }
 }
 
-void setup()
-{
-#ifdef DEBUG
+void setup() {
+    rst_reason = esp_reset_reason();
     Serial.begin(115200);
-#endif
     // init GPS serial interface
     GPSSerial.begin(9600, SERIAL_8N1, 12, 15);
+    // init MPU-6050
+    mpu_setup();
     // init SD card SPI interface
     hspi = new SPIClass(HSPI);
     pinMode(SS_PIN, OUTPUT); //HSPI SS
     // SCLK = 25, MISO = 32, MOSI = 13, SS = 33
     hspi->begin(SCLK_PIN, MISO_PIN, MOSI_PIN, SS_PIN); //SCLK, MISO, MOSI, SS
-    // init MPU on I2C
-    Wire.begin();
-    Wire.setClock(400000);
-#ifdef DEBUG
-    Serial.println(F("Initializing I2C devices..."));
-#endif
-    // initialize device
-    mpu.initialize();
-    pinMode(MPU_INTERRUPT_PIN, INPUT);
-
-    // verify connection
-    Serial.println(F("Testing device connections..."));
-    Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
-
-    // empty buffer
-    while (Serial.available() && Serial.read());
-
-    // load and configure the DMP
-    Serial.println(F("Initializing DMP..."));
-    devStatus = mpu.dmpInitialize();
-
-    // supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(220);
-    mpu.setYGyroOffset(76);
-    mpu.setZGyroOffset(-85);
-    mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
-
-        // make sure it worked (returns 0 if so)
-    if (devStatus == 0) {
-        // Calibration Time: generate offsets and calibrate our MPU6050
-        mpu.CalibrateAccel(6);
-        mpu.CalibrateGyro(6);
-        mpu.PrintActiveOffsets();
-        // turn on the DMP, now that it's ready
-        Serial.println(F("Enabling DMP..."));
-        mpu.setDMPEnabled(true);
-
-        // enable Arduino interrupt detection
-        Serial.print(F("Enabling interrupt detection (Arduino external interrupt "));
-        Serial.print(digitalPinToInterrupt(MPU_INTERRUPT_PIN));
-        Serial.println(F(")..."));
-        attachInterrupt(digitalPinToInterrupt(MPU_INTERRUPT_PIN), dmpDataReady, RISING);
-        mpuIntStatus = mpu.getIntStatus();
-
-        // set our DMP Ready flag so the main loop() function knows it's okay to use it
-        Serial.println(F("DMP ready! Waiting for first interrupt..."));
-        dmpReady = true;
-
-        // get expected DMP packet size for later comparison
-        packetSize = mpu.dmpGetFIFOPacketSize();
-        printf("packetSize: %d", packetSize);
-    } else {
-        // ERROR!
-        // 1 = initial memory load failed
-        // 2 = DMP configuration updates failed
-        // (if it's going to break, usually the code will be 1)
-        Serial.print(F("DMP Initialization failed (code "));
-        Serial.print(devStatus);
-        Serial.println(F(")"));
-    }
-
-    if (!SD.begin(SS_PIN, *hspi))
-    {
+    if (!SD.begin(SS_PIN, *hspi)) {
         Serial.println("Card Mount Failed");
-        led.Blink(100, 100).Forever();
+        status_led.Blink(100, 100).Forever();
         return;
     }
     uint8_t cardType = SD.cardType();
 
     if (cardType == CARD_NONE)
     {
-        led.Blink(100, 1000).Forever();
+        status_led.Blink(100, 1000).Forever();
         Serial.println("No SD card attached");
         return;
     }
-
-    led.Blink(500, 500).Forever();
-#ifdef DEBUG
-    Serial.print(F("\nWaiting GPS fix... "));
-#endif
-    do
-    {
-        smartDelay(1000);
-    } while (!gps.location.isValid() || !gps.location.isUpdated());
-
-#ifdef DEBUG
-    Serial.println(F("OK"));
-#endif
-
-    // captura a hora do GPS
+  if(rst_reason == ESP_RST_POWERON) {
+    // wait for GPS fix
+    status_led.Blink(250, 250).Forever();
+    ESP_LOGI(tag, "waiting gps fix...");
+    // Serial.print(F("\nwaiting gps fix: "));
+    do {
+        status_led.Update();
+        smartDelay(250);
+    } while (!gps.location.isValid() || !gps.location.isUpdated() || 
+             !gps.time.isValid() || !gps.time.isUpdated() ||
+             !gps.date.isValid() || !gps.date.isUpdated());
+    ESP_LOGI(tag, "gps fixed!");
+    // Serial.println(F("ok"));
+      // get time from GPS
     setTime(gps.time.hour(), gps.time.minute(), gps.time.second(),
             gps.date.day(), gps.date.month(), gps.date.year());
     start_ts = now();
-    sprintf(gpsFileName, "/%d-gps.txt", start_ts);
-    sprintf(accFileName, "/%d-acc.txt", start_ts);
-#ifdef DEBUG
-    Serial.print(F("Current TimeStamp:"));
-    Serial.println(start_ts);
-#endif
-    led.Blink(100, 10000).Forever();
+    Serial.println("first boot!");
+  }
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
 }
 
-void loop()
-{
-    if (millis() > time_now + period)
-    {
-        time_now = millis();
-        readGPS();
+void loop() {
+  if (!dmp_ready) return;
+  // verifies GPS read period to write data on file
+  if (millis() > time_now + GPS_READ_PERIOD_MS) {
+    time_now = millis();
+    read_gps();
+  }
+  // smartDelay(MPU_READ_PERIOD_MS);
+  // reads the MPU data
+  read_mpu();
+    // if buffer full
+    if (cur_sample >= (0.8 * NUM_SAMPLES)) {
+        ESP_LOGI(tag, "%d", cur_sample);
+      write_mpu_data();
+      // reset buffer index
+      cur_sample = 0;
     }
-    smartDelay(periodMPU);
-    readMPU();
-    if (millis() > 5000 && gps.charsProcessed() < 10)
-        Serial.println(F("No GPS data received: check wiring"));
+    else {
+        Serial.println("Going to sleep now");
+        Serial.flush(); 
+        esp_deep_sleep_start();
+    }
 }
