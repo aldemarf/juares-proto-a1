@@ -18,8 +18,8 @@ MPUUtil::MPUUtil() {
     sd = SDUtil::getInstance();
 }
 
-void MPUUtil::write_data() {
-  sprintf(filename, "/%lu-mpu.txt", start_ts);
+void MPUUtil::write_data(char* filename) {
+  // sprintf(filename, "/%lu-mpu.txt", start_ts);
 #ifdef DEBUG
   Serial.println(F("writing accelerometer data..."));
 #endif
