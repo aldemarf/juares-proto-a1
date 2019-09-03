@@ -15,7 +15,7 @@ MPUUtil* MPUUtil::getInstance() {
 }
 
 MPUUtil::MPUUtil() {
-    
+    sd = SDUtil::getInstance();
 }
 
 void MPUUtil::write_data() {

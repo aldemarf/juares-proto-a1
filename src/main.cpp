@@ -52,18 +52,6 @@ uint8_t fifo_buffer[64]; // FIFO storage buffer
 static const char* tag = "jua-ams";
  esp_reset_reason_t rst_reason;
 
-struct mpu_samples_t {
-  uint32_t ts;
-  Quaternion q;
-  int16_t gX;
-  int16_t gY;
-  int16_t gZ;
-  int16_t aX;
-  int16_t aY;
-  int16_t aZ;
-} mpu_samples[NUM_SAMPLES];
-
-RTC_DATA_ATTR uint8_t cur_sample = 0;
 RTC_DATA_ATTR time_t start_ts = 0;
 char filename[30];
 
