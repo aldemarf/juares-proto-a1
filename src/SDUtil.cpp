@@ -201,3 +201,7 @@ void SDUtil::testFileIO(fs::FS &fs, const char *path) {
     Serial.printf("%u bytes written for %u ms\n", 2048 * 512, end);
     file.close();
 }
+
+void SDUtil::appendFile(const char *path, const char *message) {
+    appendFile(SD, path, message);
+}

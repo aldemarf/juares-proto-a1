@@ -2,6 +2,7 @@
 #define __MPUUTIL_H__
 
 #include "SDUtil.h"
+#include <Wire.h>
 #include "I2Cdev.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 
@@ -13,7 +14,7 @@ class MPUUtil {
         void writeToFile();
         void readFromSensor();
         void setup();
-        void wake();
+        void wakeup();
     private:
         MPUUtil();
         MPUUtil(const MPUUtil&) = delete;
@@ -34,7 +35,7 @@ class MPUUtil {
             int16_t aY;
             int16_t aZ;
         } mpu_samples[NUM_SAMPLES];
-        RTC_DATA_ATTR uint8_t cur_sample = 0;
+        // RTC_DATA_ATTR uint8_t cur_sample = 0;
 };
 
 

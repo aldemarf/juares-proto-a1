@@ -18,6 +18,7 @@ MPUUtil::MPUUtil() {
     sd = SDUtil::getInstance();
 }
 
+#if 0
 void MPUUtil::writeToFile(char* filename) {
   // sprintf(filename, "/%lu-mpu.txt", start_ts);
 #ifdef DEBUG
@@ -49,8 +50,10 @@ void MPUUtil::writeToFile(char* filename) {
   Serial.println(F("ok"));
 #endif
 }
+#endif
 
 void MPUUtil::readFromSensor() {
+#if 0
   uint16_t fifo_count = mpu.getFIFOCount();
 #ifdef DEBUG
   Serial.print("ps: "); Serial.print(packet_size);
@@ -74,6 +77,7 @@ void MPUUtil::readFromSensor() {
       cur_sample = 0;
     }
   }
+#endif
 }
 
 void MPUUtil::setup() {
@@ -94,7 +98,7 @@ void MPUUtil::setup() {
     while (Serial.available() && Serial.read()); // empty buffer
     while (!Serial.available());                 // wait for data
     while (Serial.available() && Serial.read()); // empty buffer again
-#endif
+
     if(rst_reason == ESP_RST_POWERON) {
         // load and configure the DMP
         Serial.println(F("Initializing DMP..."));
@@ -139,8 +143,5 @@ void MPUUtil::setup() {
             Serial.println(F(")"));
         }
     }
-}
-
-3
-
+    #endif
 }
