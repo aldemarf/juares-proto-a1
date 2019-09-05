@@ -10,8 +10,8 @@ const uint8_t NUM_SAMPLES = 100;
 class MPUUtil {
     public:
         static MPUUtil* getInstance();
-        void write_data();
-        void read();
+        void writeToFile();
+        void readFromSensor();
         void setup();
         void wake();
     private:
@@ -19,9 +19,13 @@ class MPUUtil {
         MPUUtil(const MPUUtil&) = delete;
         MPUUtil& operator=(const MPUUtil&) = delete;
         static MPUUtil* pInstance;
+        MPU6050 mpu;
         SDUtil* sd;
+        // MPU-6050 constants
+        static const uint8_t INTERRUPT_PIN = 2;
+        // TODO: considering migrate this to a class, research the best solution
         struct mpu_samples_t {
-            uint32_t ts;
+            time_t ts;
             Quaternion q;
             int16_t gX;
             int16_t gY;

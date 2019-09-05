@@ -18,7 +18,7 @@ MPUUtil::MPUUtil() {
     sd = SDUtil::getInstance();
 }
 
-void MPUUtil::write_data(char* filename) {
+void MPUUtil::writeToFile(char* filename) {
   // sprintf(filename, "/%lu-mpu.txt", start_ts);
 #ifdef DEBUG
   Serial.println(F("writing accelerometer data..."));
@@ -50,8 +50,8 @@ void MPUUtil::write_data(char* filename) {
 #endif
 }
 
-void MPUUtil::read() {
-  fifo_count = mpu.getFIFOCount();
+void MPUUtil::readFromSensor() {
+  uint16_t fifo_count = mpu.getFIFOCount();
 #ifdef DEBUG
   Serial.print("ps: "); Serial.print(packet_size);
   Serial.print(" | fc: "); Serial.println(fifo_count);
