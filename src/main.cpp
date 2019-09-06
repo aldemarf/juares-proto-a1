@@ -26,6 +26,36 @@
 #include "I2Cdev.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 
+// LoRa headers
+#include <lmic.h>
+#include <hal/hal.h>
+#include <SPI.h>
+
+// LoRa server definitions
+// LoraServer
+static const u1_t PROGMEM APPEUI[8]= { 0x56, 0xF1, 0x01, 0xD0, 0x7E, 0xD5, 0xB3, 0x70 };
+void os_getArtEui (u1_t* buf) { memcpy_P(buf, APPEUI, 8);}
+
+// LoraServer
+static const u1_t PROGMEM DEVEUI[8] = { 0x4B, 0x16, 0x6A, 0x7E, 0x82, 0x4B, 0xE0, 0x00 };
+void os_getDevEui (u1_t* buf) { memcpy_P(buf, DEVEUI, 8);}
+
+// LoraServer
+static const u1_t PROGMEM APPKEY[16] = { 0x20, 0x60, 0x44, 0x35, 0x51, 0xD7, 0x2E, 0xD6, 0xFD, 0xFB, 0x89, 0x32, 0xC5, 0xFE, 0x4F, 0x2D };
+void os_getDevKey (u1_t* buf) {  memcpy_P(buf, APPKEY, 16);}
+
+// Schedule TX every this many seconds (might become longer due to duty
+// cycle limitations).
+const unsigned TX_INTERVAL = 10;
+
+// Pin mapping
+const lmic_pinmap lmic_pins = {
+    .nss = 18,
+    .rxtx = LMIC_UNUSED_PIN,
+    .rst = 23,
+    .dio = {26, 33, 32}
+};
+
 #define DEBUG
 
 // MPU-6050 constants
@@ -57,7 +87,7 @@ SPIClass *hspi = NULL;
 RTC_DATA_ATTR bool initialBoot = true;
 
 // application constants
-const uint16_t GPS_READ_PERIOD_MS = 60000;
+const uint16_t GPS_READ_PERIOD_MS = 5000;
 const uint16_t MPU_READ_PERIOD_MS = 1000;
 const uint8_t NUM_SAMPLES = 10;
 const uint8_t STATUS_LED_PIN = 14;
@@ -94,6 +124,111 @@ char filename[30];
 // ================================================================
 
 volatile bool mpu_interrupt = false; // indicates whether MPU interrupt pin has gone high
+
+void do_send(uint8_t *str) {
+    for (int i=0; i<8; i++) {
+      LMIC_disableChannel(i);
+    };
+    
+    // Now, disable channels 16-72 (is there 72 ??)
+    for (int i=16; i<72; i++) {
+      LMIC_disableChannel(i);
+    };
+
+    if (LMIC.opmode & OP_TXRXPEND) {
+        Serial.println(F("OP_TXRXPEND, not sending"));
+    } else {
+        LMIC_setTxData2(1, str, sizeof(str)-1, 0);
+        Serial.println(F("Packet queued"));
+    }
+}
+
+void onEvent (ev_t ev) {
+    // for (int channel=0; channel<8; ++channel) {
+    //     LMIC_disableChannel(channel);
+    // }
+    // for (int channel=16; channel<72; ++channel) {
+    //     LMIC_disableChannel(channel);
+    // }
+    Serial.print(os_getTime());
+    Serial.print(": ");
+    switch(ev) {
+        case EV_SCAN_TIMEOUT:
+            Serial.println(F("EV_SCAN_TIMEOUT"));
+            break;
+        case EV_BEACON_FOUND:
+            Serial.println(F("EV_BEACON_FOUND"));
+            break;
+        case EV_BEACON_MISSED:
+            Serial.println(F("EV_BEACON_MISSED"));
+            break;
+        case EV_BEACON_TRACKED:
+            Serial.println(F("EV_BEACON_TRACKED"));
+            break;
+        case EV_JOINING:
+            Serial.println(F("EV_JOINING"));
+            break;
+        case EV_JOINED:
+            Serial.println(F("EV_JOINED"));
+            for (int i=0; i<8; i++) {
+              LMIC_disableChannel(i);
+            };
+            // Now, disable channels 16-72 (is there 72 ??)
+            for (int i=16; i<72; i++) {
+              LMIC_disableChannel(i);
+            };
+            LMIC_setLinkCheckMode(0);
+            for (int i=0; i<8; i++) {
+              LMIC_disableChannel(i);
+            };
+            // Now, disable channels 16-72 (is there 72 ??)
+            for (int i=16; i<72; i++) {
+              LMIC_disableChannel(i);
+            };
+            break;
+        case EV_RFU1:
+            Serial.println(F("EV_RFU1"));
+            break;
+        case EV_JOIN_FAILED:
+            Serial.println(F("EV_JOIN_FAILED"));
+            break;
+        case EV_REJOIN_FAILED:
+            Serial.println(F("EV_REJOIN_FAILED"));
+            break;
+            break;
+        case EV_TXCOMPLETE:
+            Serial.println(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
+            if (LMIC.txrxFlags & TXRX_ACK)
+              Serial.println(F("Received ack"));
+            if (LMIC.dataLen) {
+              Serial.println(F("Received "));
+              Serial.println(LMIC.dataLen);
+              Serial.println(F(" bytes of payload"));
+            }
+            // Schedule next transmission
+            // os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL), do_send);
+            break;
+        case EV_LOST_TSYNC:
+            Serial.println(F("EV_LOST_TSYNC"));
+            break;
+        case EV_RESET:
+            Serial.println(F("EV_RESET"));
+            break;
+        case EV_RXCOMPLETE:
+            // data received in ping slot
+            Serial.println(F("EV_RXCOMPLETE"));
+            break;
+        case EV_LINK_DEAD:
+            Serial.println(F("EV_LINK_DEAD"));
+            break;
+        case EV_LINK_ALIVE:
+            Serial.println(F("EV_LINK_ALIVE"));
+            break;
+         default:
+            Serial.println(F("Unknown event"));
+            break;
+    }
+}
 
 void dmpDataReady()
 {
@@ -325,15 +460,19 @@ void read_gps()
     setTime(gps.time.hour(), gps.time.minute(), gps.time.second(),
             gps.date.day(), gps.date.month(), gps.date.year());
     char sample_str[100];
+    uint8_t lora_str[100];
+
     char lat_str[20];
     char lng_str[20];
     dtostrf(gps.location.lat(), 4, 6, lat_str);
     dtostrf(gps.location.lng(), 4, 6, lng_str);
     sprintf(sample_str, "%lu;%s;%s\n",
             now(), lat_str, lng_str);
+    memcpy(lora_str, sample_str, 100);
+    do_send(lora_str);
 #ifdef DEBUG
     Serial.print(F("\ntem localizacao... "));
-    Serial.println(sample_str);
+    Serial.println(sample_str); 
 #endif
     // write GPS data on file
     appendFile(SD, filename, sample_str);
@@ -523,11 +662,24 @@ void setup()
           gps.date.day(), gps.date.month(), gps.date.year());
   status_led.Off();
   start_ts = now();
+  // LoRa init
+  os_init();
+  LMIC_reset();
+  for (int i=0; i<8; i++) {
+    LMIC_disableChannel(i);
+  };
+  // Now, disable channels 16-72 (is there 72 ??)
+  for (int i=16; i<72; i++) {
+    LMIC_disableChannel(i);
+  };
+  uint8_t start[] = "starting";
+  do_send(start);
   Serial.println("first boot!");
 }
 
 void loop()
 {
+  os_runloop_once();
   if (!dmp_ready)
     return;
   // verifies GPS read period to write data on file
