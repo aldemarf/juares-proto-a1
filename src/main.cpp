@@ -21,6 +21,8 @@ SDUtil *sd = SDUtil::getInstance();
 // MPUUtil *mpu = MPUUtil::getInstance();
 // GPS control object
 GPSUtil *gps = GPSUtil::getInstance();
+// LoRa communication control object
+LoRaUtil *lora = LoRaUtil::getInstance();
 // status LED configuration
 auto statusLED = JLed(statusLED_PIN);
 // tag for logging system info
@@ -70,6 +72,7 @@ void readGPS() {
   sprintf(filename, "/%lu-gps.txt", startTS);
   gps->getLocation(strBuffer);
   sd->appendFile(filename, strBuffer);
+  lora->do_send(strBuffer);
   statusLED.Blink(250, 250).Repeat(2);
 }
 
@@ -79,6 +82,7 @@ void setup()
   Serial.begin(115200);
   gps->setup();
   sd->setup();
+  lora->setup();
   // program periodical functions for GPS reading
   Alarm.timerRepeat(GPS_READ_PERIOD_S, readGPS);   
   // configure the sleep timer for the system
