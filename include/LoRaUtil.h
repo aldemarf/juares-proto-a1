@@ -11,7 +11,6 @@ class LoRaUtil {
         static LoRaUtil* getInstance();
         void setup();
         void loop();
-        void onEvent(ev_t ev);
         void send(char* data);
     private:
         LoRaUtil();
