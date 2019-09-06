@@ -26,7 +26,7 @@ auto statusLED = JLed(statusLED_PIN);
 // tag for logging system info
 static const char *tag = "juares";
 // variable to store the reason of device restart
-esp_reset_reason_t rst_reason;
+esp_reset_reason_t rstReason;
 // variable that stores the time stamp of system start
 RTC_DATA_ATTR time_t startTS = 0;
 
@@ -75,7 +75,7 @@ void readGPS() {
 
 void setup()
 {
-  rst_reason = esp_reset_reason();
+  rstReason = esp_reset_reason();
   Serial.begin(115200);
   gps->setup();
   sd->setup();
@@ -83,7 +83,7 @@ void setup()
   Alarm.timerRepeat(GPS_READ_PERIOD_S, readGPS);   
   // configure the sleep timer for the system
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_mS_FACTOR);
-  if (rst_reason == ESP_RST_POWERON)
+  if (rstReason == ESP_RST_POWERON)
   {
     // mpu->setup();
     // signal that GPS is waiting to fix
@@ -104,7 +104,7 @@ void setup()
     // mpu->wakeup();
   }
 }
-// TODO: trabalhar no loop!!!
+
 void loop()
 {
   Alarm.delay(1);
@@ -112,12 +112,7 @@ void loop()
 #if 0
   if (!dmp_ready)
     return;
-  // verifies GPS read period to write data on file
-  if (millis() > time_now + GPS_READ_PERIOD_MS)
-  {
-    time_now = millis();
-    read_gps();
-  }
+
   // smartDelay(MPU_READ_PERIOD_MS);
   // reads the MPU data
   read_mpu();

@@ -36,7 +36,7 @@ bool GPSUtil::getLocation(char *locationStr)
         dtostrf(gps.location.lat(), 4, 6, lat_str);
         dtostrf(gps.location.lng(), 4, 6, lng_str);
         sprintf(locationStr, "%lu;%s;%s\n", now(), lat_str, lng_str);
-        successFlag == true;
+        successFlag = true;
     }
     return successFlag;
 }
