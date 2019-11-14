@@ -58,7 +58,7 @@ RTC_DATA_ATTR bool initialBoot = true;
 
 // application constants
 const uint16_t GPS_READ_PERIOD_MS = 60000;
-const uint16_t MPU_READ_PERIOD_MS = 1000;
+const uint16_t MPU_READ_PERIOD_MS = 20;
 const uint8_t NUM_SAMPLES = 10;
 const uint8_t STATUS_LED_PIN = 14;
 
@@ -72,6 +72,7 @@ RTC_DATA_ATTR uint16_t packet_size;   // expected DMP packet size (default is 42
 uint16_t fifo_count;                  // count of all bytes currently in FIFO
 uint8_t fifo_buffer[64];              // FIFO storage buffer
 static const char *tag = "juares";
+uint32_t packet_counter = 0;
 
 struct mpu_samples_t
 {
@@ -348,7 +349,7 @@ void write_mpu_data()
 {
   sprintf(filename, "/%lu-mpu.txt", start_ts);
 #ifdef DEBUG
-  Serial.println(F("writing accelerometer data..."));
+  // Serial.println(F("writing accelerometer data..."));
 #endif
   char sample_str[200];
   char qw_str[20];
@@ -362,20 +363,28 @@ void write_mpu_data()
     dtostrf(mpu_samples[i].q.x, 4, 6, qx_str);
     dtostrf(mpu_samples[i].q.y, 4, 6, qy_str);
     dtostrf(mpu_samples[i].q.z, 4, 6, qz_str);
-    sprintf(sample_str, "%lu;%s;%s;%s;%s;%d;%d;%d;%d;%d;%d\n",
-            mpu_samples[i].ts, qw_str, qx_str, qy_str, qz_str,
-            mpu_samples[i].gX, mpu_samples[i].gY, mpu_samples[i].gZ,
-            mpu_samples[i].aX, mpu_samples[i].aY, mpu_samples[i].aZ);
+    // sprintf(sample_str, "%lu;%s;%s;%s;%s;%d;%d;%d;%d;%d;%d\n",
+    //         mpu_samples[i].ts, qw_str, qx_str, qy_str, qz_str,
+    //         mpu_samples[i].gX, mpu_samples[i].gY, mpu_samples[i].gZ,
+    //         mpu_samples[i].aX, mpu_samples[i].aY, mpu_samples[i].aZ);
+    sprintf(sample_str, "%lu;%f;%f;%f;%f;%f;%f\n",
+            packet_counter,
+            ((double) mpu_samples[i].gX)*(4000.0/65535.0), ((double) mpu_samples[i].gY)*(4000.0/65535.0), ((double) mpu_samples[i].gZ)*(4000.0/65535.0),
+            ((double) mpu_samples[i].aX)* (4.0/65535.0),   ((double) mpu_samples[i].aY)*(4.0/65535.0),    ((double) mpu_samples[i].aZ)*(4.0/65535.0));
+    packet_counter++;
     // escreve valor 'x' do acelerometro no arquivo
+    Serial.println(sample_str);
     appendFile(SD, filename, sample_str);
 #ifdef DEBUG
-    if (i == 0)
-      Serial.println(mpu_samples[0].ts);
+      // if (i == 0)
+      // Serial.println(mpu_samples[0].ts);
       // Serial.println(sample_str);
+      // Serial.println(packet_counter);
+
 #endif
   }
 #ifdef DEBUG
-  Serial.println(F("ok"));
+  // Serial.println(F("ok"));
 #endif
 }
 
@@ -383,10 +392,10 @@ void read_mpu()
 {
   fifo_count = mpu.getFIFOCount();
 #ifdef DEBUG
-  Serial.print("ps: ");
-  Serial.print(packet_size);
-  Serial.print(" | fc: ");
-  Serial.println(fifo_count);
+  // Serial.print("ps: ");
+  // Serial.print(packet_size);
+  // Serial.print("fc: ");
+  // Serial.println(fifo_count);
 #endif
   while (fifo_count >= packet_size)
   {
@@ -506,37 +515,42 @@ void setup()
   }
 
   // wait for GPS fix
-  status_led.Blink(250, 250).Forever();
-  ESP_LOGI(tag, "waiting gps fix...");
+  // status_led.Blink(2x50, 250).Forever();
+  // ESP_LOGI(tag, "waiting gps fix...");
   // Serial.print(F("\nwaiting gps fix: "));
-  do
-  {
-    status_led.Update();
-    smartDelay(250);
-  } while (!gps.location.isValid() || !gps.location.isUpdated() ||
-            !gps.time.isValid() || !gps.time.isUpdated() ||
-            !gps.date.isValid() || !gps.date.isUpdated());
-  ESP_LOGI(tag, "gps fixed!");
-  // Serial.println(F("ok"));
-  // get time from GPS
-  setTime(gps.time.hour(), gps.time.minute(), gps.time.second(),
-          gps.date.day(), gps.date.month(), gps.date.year());
-  status_led.Off();
-  start_ts = now();
+  // do
+  // {
+  //   status_led.Update();
+  //   smartDelay(250);
+  // } while (!gps.location.isValid() || !gps.location.isUpdated() ||
+  //           !gps.time.isValid() || !gps.time.isUpdated() ||
+  //           !gps.date.isValid() || !gps.date.isUpdated());
+  // ESP_LOGI(tag, "gps fixed!");
+  // // Serial.println(F("ok"));
+  // // get time from GPS
+  // setTime(gps.time.hour(), gps.time.minute(), gps.time.second(),
+  //         gps.date.day(), gps.date.month(), gps.date.year());
+  // status_led.Off();
+  // start_ts = now();
   Serial.println("first boot!");
+  status_led.On().Update();
+  delay(5000);
+  status_led.Blink(250, 250).Forever();
 }
 
 void loop()
 {
+  status_led.Update();
   if (!dmp_ready)
     return;
   // verifies GPS read period to write data on file
-  if (millis() > time_now + GPS_READ_PERIOD_MS)
-  {
-    time_now = millis();
-    read_gps();
-  }
-  smartDelay(MPU_READ_PERIOD_MS);
+  // if (millis() > time_now + GPS_READ_PERIOD_MS)
+  // {
+  //   time_now = millis();
+  //   read_gps();
+  // }
+  // smartDelay(MPU_READ_PERIOD_MS);
   // reads the MPU data
   read_mpu();
+  delay(MPU_READ_PERIOD_MS);
 }
